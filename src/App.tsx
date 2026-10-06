@@ -1,126 +1,149 @@
+import { useMemo, useState } from "react";
 import "./styles.css";
-
-const project = {
-  "sourceNo": 8,
-  "id": "hxyfront-62013",
-  "port": 62013,
-  "title": "木结构榫卯构件测绘",
-  "domain": "古建木结构",
-  "prompt": "开发一个古建筑木结构榫卯构件测绘前端项目，测绘人员可以录入建筑名称、构件编号、木材种类、榫卯类型、截面尺寸、病害位置、变形情况和修缮建议。页面需要有构件清单、榫卯类型筛选、尺寸记录表、病害标记图和单栋建筑的构件关系视图。",
-  "palette": [
-    "#854d0e",
-    "#475569",
-    "#0f766e"
-  ],
-  "metrics": [
-    "构件数量",
-    "病害点",
-    "榫卯类型",
-    "待修缮"
-  ],
-  "filters": [
-    "燕尾榫",
-    "透榫",
-    "半榫",
-    "箍头榫"
-  ],
-  "fields": [
-    "建筑名称",
-    "构件编号",
-    "木材种类",
-    "榫卯类型",
-    "截面尺寸",
-    "修缮建议"
-  ],
-  "records": [
-    [
-      "梁架A-03",
-      "透榫",
-      "截面180x240mm",
-      "端部开裂"
-    ],
-    [
-      "柱网C-12",
-      "楠木",
-      "柱脚糟朽",
-      "建议局部墩接"
-    ],
-    [
-      "斗拱D-07",
-      "半榫",
-      "轻微变形",
-      "继续监测"
-    ]
-  ]
-};
+import { useStore, getSurveyor, setSurveyor, resetAll } from "./domain/store";
+import { computeQueue, deriveDiseases, isStale } from "./domain/engine";
+import RelationGraph from "./components/RelationGraph";
+import ComponentList from "./components/ComponentList";
+import ComponentDetail from "./components/ComponentDetail";
+import RegisterForm from "./components/RegisterForm";
+import QueuePanel from "./components/QueuePanel";
+import ConflictsPanel from "./components/ConflictsPanel";
 
 function App() {
+  const state = useStore();
+  const [surveyor, setSurveyorState] = useState(getSurveyor());
+  const [buildingId, setBuildingId] = useState(state.buildings[0]?.id ?? "b1");
+  const [selectedId, setSelectedId] = useState<string | null>(
+    state.components.find((c) => c.buildingId === buildingId)?.id ?? null,
+  );
+  const [tab, setTab] = useState<"board" | "register">("board");
+
+  const selected =
+    state.components.find((c) => c.id === selectedId && c.buildingId === buildingId) ??
+    state.components.find((c) => c.buildingId === buildingId) ??
+    null;
+
+  const stats = useMemo(() => {
+    const mine = state.components.filter((c) => c.buildingId === buildingId);
+    const scoped = { ...state, buildings: state.buildings.filter((b) => b.id === buildingId), components: mine };
+    const q = computeQueue(scoped);
+    return {
+      total: mine.length,
+      diseases: mine.filter((c) => deriveDiseases(c).severity !== "none").length,
+      mortises: new Set(mine.map((c) => c.mortise)).size,
+      waiting: q.waiting.length,
+      processing: q.processing.length,
+      stale: mine.filter(isStale).length,
+    };
+  }, [state, buildingId]);
+
+  const changeSurveyor = (name: string) => {
+    setSurveyorState(name);
+    setSurveyor(name);
+  };
+
   return (
     <main className="app">
-      <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
-      </section>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">强风灾后 · 古建筑木结构抢护工作台</p>
+          <h1>续作抢护台</h1>
+        </div>
+        <div className="topbar-right">
+          <label className="surveyor">
+            <span>当前测绘员</span>
+            <input value={surveyor} onChange={(e) => changeSurveyor(e.target.value)} />
+          </label>
+          <select
+            className="building-select"
+            value={buildingId}
+            onChange={(e) => {
+              setBuildingId(e.target.value);
+              setSelectedId(state.components.find((c) => c.buildingId === e.target.value)?.id ?? null);
+            }}
+          >
+            {state.buildings.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}（支撑位 {b.slotCount}）</option>
+            ))}
+          </select>
+          <button
+            className="ghost"
+            onClick={() => {
+              if (confirm("恢复演示数据？当前队列与旧版留档将被清空。")) {
+                resetAll();
+                setSelectedId(null);
+              }
+            }}
+          >
+            重置演示
+          </button>
+        </div>
+      </header>
 
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[28, 6, 14, 91][index] ?? 10}</strong>
-          </article>
-        ))}
+        <article><small>在册构件</small><strong>{stats.total}</strong></article>
+        <article><small>病害点</small><strong>{stats.diseases}</strong></article>
+        <article><small>榫卯类型</small><strong>{stats.mortises}</strong></article>
+        <article><small>处理中 / 候队</small><strong>{stats.processing}/{stats.waiting}</strong></article>
+        <article className={stats.stale ? "metric-alert" : ""}>
+          <small>建议失效待核</small><strong>{stats.stale}</strong>
+        </article>
       </section>
 
-      <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}分类</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
+      <nav className="tabs">
+        <button className={tab === "board" ? "tab on" : "tab"} onClick={() => setTab("board")}>抢护队列与关系</button>
+        <button className={tab === "register" ? "tab on" : "tab"} onClick={() => setTab("register")}>登记新构件</button>
+        <span className="persist-hint">数据保存在本机浏览器：关掉页面再打开，队列、旧版留档和未完成处理仍在</span>
+      </nav>
 
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
+      {tab === "register" ? (
+        <section className="panel">
+          <h2>登记受灾构件</h2>
+          <RegisterForm state={state} buildingId={buildingId} />
         </section>
-      </section>
+      ) : (
+        <div className="board-grid">
+          <section className="panel">
+            <div className="heading">
+              <h2>抢护队列</h2>
+              <span className="hint-line">按变形与下游构件数占位，容量不足先排队</span>
+            </div>
+            <QueuePanel state={state} buildingId={buildingId} onSelect={setSelectedId} />
+          </section>
 
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>近期记录</p>
-            <h2>工作台摘要</h2>
-          </div>
-          <button>导出CSV</button>
+          <section className="panel">
+            <div className="heading">
+              <h2>梁架 · 斗拱 · 柱网传力关系</h2>
+              <span className="hint-line">点选构件查看复测与修缮</span>
+            </div>
+            <RelationGraph
+              state={state}
+              buildingId={buildingId}
+              selectedId={selected?.id ?? null}
+              onSelect={setSelectedId}
+            />
+            <ConflictsPanel state={state} />
+          </section>
+
+          <section className="panel list-panel">
+            <div className="heading"><h2>构件清单与筛选</h2></div>
+            <ComponentList
+              state={state}
+              buildingId={buildingId}
+              selectedId={selected?.id ?? null}
+              onSelect={setSelectedId}
+            />
+          </section>
+
+          <section className="panel detail-panel">
+            {selected ? (
+              <ComponentDetail key={selected.id} state={state} component={selected} surveyor={surveyor} />
+            ) : (
+              <p className="hint-line">请选择一个构件。</p>
+            )}
+          </section>
         </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      )}
     </main>
   );
 }
